@@ -100,9 +100,13 @@ def run_comment_task(task: CommentTask):
         if task.should_cancel():
             return
         try:
-            _send_comment(task.user_id, task.room_id, word_set)
+            ok = _send_comment(task.user_id, task.room_id, word_set)
         except Exception:
-            pass
+            ok = False
+        if ok:
+            task.increment_success()
+        else:
+            task.increment_failed()
 
     task.status = TaskStatus.running
     with ThreadPoolExecutor(max_workers=task.workers) as executor:
@@ -389,4 +393,4 @@ async def delete_task(task_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
