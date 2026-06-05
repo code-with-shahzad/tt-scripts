@@ -12,9 +12,11 @@ import json
 import uuid
 import binascii
 import os
+import secrets
 import threading
 import subprocess
 import sys
+import string
 from html import unescape
 from typing import Tuple, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -90,12 +92,20 @@ SESSION_IDS = [
     "d8df8982e2f705f05a1672bbe5896ad0",
     "ed5f8bd4d239ced09488d3986c400c29"
 ]
-SID_TT = "df20a3975324769a20a8d993a369db79"
-UID_TT = "9a64dbc5bbe69f7521cdaef09bf78245196192f3eefbbc7801459243da8448e7"
-TT_CSRF = "pWNT60G4-XKn3GrnIEcy0fQwsKDIV3fMXZTU"
+REGIONS = ["AE", "IQ", "US", "FR", "DE"]
+DEVICE_TYPES = ["SM-S928B", "P40", "Mi 11", "iPhone12,1", "OnePlus9"]
+DEVICE_BRANDS = ["samsung", "huawei", "xiaomi", "apple", "oneplus"]
+UA_APP_VERSIONS = [
+    "2022806050", "2022907000", "2023008001", "2023109002",
+    "2023111003", "2023122004", "2024011005", "2024022006"
+]
+UA_TTNET_VERSIONS = ["6a8e8a4c", "7b9f9b5d", "8c0a0c6e", "9d1b1d7f"]
+UA_QUIC_VERSIONS = ["5f23035d", "6g34146e", "7h45257f", "8i56368g"]
 
-success_count = 0
-failed_count = 0
+comment_success = 0
+comment_failed = 0
+like_success = 0
+like_failed = 0
 count_lock = threading.Lock()
 
 
@@ -144,6 +154,16 @@ def extract_user_id(html: str, username: str) -> str:
                 unique_id = str(user.get("uniqueId") or user.get("unique_id") or "").lower()
                 if unique_id == username_lower and user.get("id"):
                     return str(user["id"])
+    escaped = re.escape(username)
+    patterns = [
+        rf'"id":"(\d+)"[^{{}}]{{0,500}}"uniqueId":"{escaped}"',
+        rf'"uniqueId":"{escaped}"[^{{}}]{{0,500}}"id":"(\d+)"',
+        r'"authorId":"(\d+)"',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, html, re.I | re.S)
+        if match:
+            return match.group(1)
     return ""
 
 
@@ -158,14 +178,19 @@ def extract_room_id(html: str) -> str:
                 rid = user.get("roomId") or user.get("room_id") or ""
                 if rid and str(rid).isdigit():
                     return str(rid)
-    for m in re.finditer(r'"roomId"\s*:\s*"(\d+)"', html):
-        return m.group(1)
+    patterns = [
+        r'"roomId"\s*:\s*"?(\d+)"?',
+        r'"room_id"\s*:\s*"?(\d+)"?',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, html)
+        if match:
+            return match.group(1)
     return ""
 
 
 def _fetch_profile_html(username: str) -> str:
     for attempt in range(3):
-        # Try curl_cffi with impersonation first
         try:
             sess = curl_requests.Session()
             sess.headers.update({
@@ -178,7 +203,6 @@ def _fetch_profile_html(username: str) -> str:
                 return resp.text
         except Exception:
             pass
-        # Fallback: plain requests
         try:
             sess2 = requests.Session()
             sess2.headers.update({
@@ -199,6 +223,13 @@ def get_user_info(username: str) -> Tuple[str, str]:
     if not username:
         raise TikTokError("Username is empty.")
     html = _fetch_profile_html(username)
+
+    if "SlardarWAF" in html or "slardar_us_waf" in html:
+        raise TikTokError(
+            "TikTok blocked this automated request before returning profile data. "
+            "Open the profile in a normal browser to confirm whether the account exists "
+            "and whether it is live."
+        )
 
     user_id = extract_user_id(html, username)
     if not user_id:
@@ -228,47 +259,75 @@ def get_user_info(username: str) -> Tuple[str, str]:
 
 
 def generate_mobile_ua() -> str:
-    models = ["SM-S908B", "SM-G991B", "Pixel 6", "Pixel 7", "CPH2237", "NE2213"]
-    model = random.choice(models)
-    return (
-        f"com.zhiliaoapp.musically/280000 (Linux; U; Android 11; en; {model}; "
-        f"Build/ABCDEF; Cronet/TTNetVersion:7b9f9b5d QuicVersion:5f23035d)"
-    )
+    android_versions = ["10", "11", "12", "13", "14"]
+    android_apis = ["29", "30", "31", "32", "33", "34"]
+    model = random.choice(DEVICE_TYPES)
+    android_ver = random.choice(android_versions)
+    api_level = random.choice(android_apis)
+    build_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=random.randint(6, 10)))
+    app_ver = random.choice(UA_APP_VERSIONS)
+    ttnet_ver = random.choice(UA_TTNET_VERSIONS)
+    quic_ver = random.choice(UA_QUIC_VERSIONS)
+    return f"com.zhiliaoapp.musically/{app_ver} (Linux; U; Android {android_ver}; {api_level}; en; {model}; Build/{build_id}; Cronet/TTNetVersion:{ttnet_ver} QuicVersion:{quic_ver})"
 
 
 def build_params():
     return {
         'iid': str(random.randint(10**18, 10**19 - 1)),
         'device_id': str(random.randint(10**18, 10**19 - 1)),
-        'ac': 'wifi',
-        'channel': 'googleplay',
-        'aid': '1233',
-        'app_name': 'musical_ly',
-        'version_code': '280000',
-        'version_name': '28.0.0',
-        'device_platform': 'android',
-        'device_type': 'SM-S928B',
-        'device_brand': 'samsung',
-        'language': 'en',
-        'os_api': '30',
-        'os_version': '11',
+        'ac': random.choice(["wifi", "4g", "5g"]),
+        'channel': "googleplay",
+        'aid': "1233",
+        'app_name': "musical_ly",
+        'version_code': str(random.randint(270000, 290000)),
+        'version_name': f"{random.randint(27,29)}.{random.randint(0,9)}.{random.randint(0,9)}",
+        'device_platform': "android",
+        'ab_version': "28.6.5",
+        'ssmix': "a",
+        'device_type': random.choice(DEVICE_TYPES),
+        'device_brand': random.choice(DEVICE_BRANDS),
+        'language': "en",
+        'os_api': str(random.randint(28, 34)),
+        'os_version': str(random.randint(10, 14)),
         'openudid': binascii.hexlify(os.urandom(8)).decode(),
-        'resolution': '1080*2400',
-        'dpi': '480',
+        'manifest_version_code': str(random.randint(2022000000, 2024999999)),
+        'resolution': random.choice(["1080*2400", "720*1600", "1440*3200"]),
+        'dpi': str(random.choice([240, 320, 480])),
+        'update_version_code': str(random.randint(2022000000, 2024999999)),
+        '_rticket': str(int(time.time() * 1000)),
+        'app_type': "normal",
+        'sys_region': random.choice(REGIONS),
+        'mcc_mnc': str(random.randint(10000, 99999)),
+        'timezone_name': random.choice(["Africa/Cairo", "Asia/Baghdad", "Europe/Paris"]),
+        'carrier_region_v2': str(random.randint(100, 999)),
+        'app_language': "en",
+        'carrier_region': random.choice(REGIONS),
+        'ac2': random.choice(["wifi", "4g", "5g"]),
+        'uoo': "0",
+        'op_region': random.choice(REGIONS),
+        'timezone_offset': str(random.choice([7200, 10800, 3600])),
+        'build_number': "28.6.5",
+        'host_abi': "arm64-v8a",
+        'locale': "en",
+        'region': random.choice(REGIONS),
         'ts': int(time.time()),
+        'cdid': str(uuid.uuid4()),
+        'webcast_language': "en",
+        'webcast_locale': "en_US",
+        'effect_sdk_version': "1.3.0"
     }
 
 
 def send_comment_thread(user_id: str, room_id: str, words: Set[str]) -> bool:
-    global success_count, failed_count
+    global comment_success, comment_failed
     try:
         sess = curl_requests.Session()
         ss = random.choice(SESSION_IDS)
+        secret = secrets.token_hex(16)
         sess.cookies.update({
+            "passport_csrf_token": secret,
+            "passport_csrf_token_default": secret,
             "sessionid": ss,
-            "sid_tt": SID_TT,
-            "uid_tt": UID_TT,
-            "tt_csrf_token": TT_CSRF,
         })
         host = random.choice(["22", "21", "16", "15", "19"])
         url = f"https://webcast{host}-normal-c-alisg.tiktokv.com/webcast/room/chat/"
@@ -276,6 +335,7 @@ def send_comment_thread(user_id: str, room_id: str, words: Set[str]) -> bool:
         cmm = random.choice(list(words))
         payload = {
             'room_id': room_id,
+            'emotes_with_index': "",
             'anchor_id': user_id,
             'content': cmm,
             'is_ad': '0',
@@ -296,28 +356,28 @@ def send_comment_thread(user_id: str, room_id: str, words: Set[str]) -> bool:
         ok = resp.status_code == 200 and ("id" in response_text or "msg_id" in response_text)
         with count_lock:
             if ok:
-                success_count += 1
+                comment_success += 1
             else:
-                failed_count += 1
-        print(f"\r[+] Success: {success_count} | Failed: {failed_count}", end="", flush=True)
+                comment_failed += 1
+        print(f"\r[+] Comment - Success: {comment_success} | Failed: {comment_failed}", end="", flush=True)
         return ok
     except Exception:
         with count_lock:
-            failed_count += 1
-        print(f"\r[+] Success: {success_count} | Failed: {failed_count}", end="", flush=True)
+            comment_failed += 1
+        print(f"\r[+] Comment - Success: {comment_success} | Failed: {comment_failed}", end="", flush=True)
         return False
 
 
 def send_like_thread(user_id: str, room_id: str) -> bool:
-    global success_count, failed_count
+    global like_success, like_failed
     try:
         sess = curl_requests.Session()
         ss = random.choice(SESSION_IDS)
+        secret = secrets.token_hex(16)
         sess.cookies.update({
+            "passport_csrf_token": secret,
+            "passport_csrf_token_default": secret,
             "sessionid": ss,
-            "sid_tt": SID_TT,
-            "uid_tt": UID_TT,
-            "tt_csrf_token": TT_CSRF,
         })
         host = random.choice(["22", "21", "16", "15", "19"])
         url = f"https://webcast{host}-normal-c-alisg.tiktokv.com/webcast/room/like/"
@@ -338,15 +398,15 @@ def send_like_thread(user_id: str, room_id: str) -> bool:
         ok = resp.status_code == 200
         with count_lock:
             if ok:
-                success_count += 1
+                like_success += 1
             else:
-                failed_count += 1
-        print(f"\r[+] Like - Success: {success_count} | Failed: {failed_count}", end="", flush=True)
+                like_failed += 1
+        print(f"\r[+] Like - Success: {like_success} | Failed: {like_failed}", end="", flush=True)
         return ok
     except Exception:
         with count_lock:
-            failed_count += 1
-        print(f"\r[+] Like - Success: {success_count} | Failed: {failed_count}", end="", flush=True)
+            like_failed += 1
+        print(f"\r[+] Like - Success: {like_success} | Failed: {like_failed}", end="", flush=True)
         return False
 
 
@@ -373,7 +433,7 @@ def main() -> None:
             for future in as_completed(futures):
                 future.result()
         print("\n" + "=" * 50)
-        print(f"[✓] Final - Success: {success_count} | Failed: {failed_count}")
+        print(f"[✓] Final - Success: {comment_success} | Failed: {comment_failed}")
     except TikTokError as e:
         print(e)
     except requests.RequestException as e:
