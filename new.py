@@ -259,7 +259,7 @@ def build_params():
     }
 
 
-def send_comment_thread(user_id: str, room_id: str, words: Set[str]) -> None:
+def send_comment_thread(user_id: str, room_id: str, words: Set[str]) -> bool:
     global success_count, failed_count
     try:
         sess = curl_requests.Session()
@@ -299,10 +299,55 @@ def send_comment_thread(user_id: str, room_id: str, words: Set[str]) -> None:
                 success_count += 1
             else:
                 failed_count += 1
+        print(f"\r[+] Success: {success_count} | Failed: {failed_count}", end="", flush=True)
+        return ok
     except Exception:
         with count_lock:
             failed_count += 1
-    print(f"\r[+] Success: {success_count} | Failed: {failed_count}", end="", flush=True)
+        print(f"\r[+] Success: {success_count} | Failed: {failed_count}", end="", flush=True)
+        return False
+
+
+def send_like_thread(user_id: str, room_id: str) -> bool:
+    global success_count, failed_count
+    try:
+        sess = curl_requests.Session()
+        ss = random.choice(SESSION_IDS)
+        sess.cookies.update({
+            "sessionid": ss,
+            "sid_tt": SID_TT,
+            "uid_tt": UID_TT,
+            "tt_csrf_token": TT_CSRF,
+        })
+        host = random.choice(["22", "21", "16", "15", "19"])
+        url = f"https://webcast{host}-normal-c-alisg.tiktokv.com/webcast/room/like/"
+        params = build_params()
+        count = random.randint(1, 30)
+        payload = {
+            'room_id': room_id,
+            'anchor_id': user_id,
+            'count': str(count),
+            'like_count': str(count),
+            'enter_from_merge': 'live_merge',
+            'request_id': f"req_{uuid.uuid4().hex}",
+        }
+        headers = {'User-Agent': generate_mobile_ua()}
+        mm = SignerPy.sign(params=params, payload=payload, url=url)
+        headers.update(mm)
+        resp = sess.post(url, params=params, data=payload, headers=headers, impersonate='chrome120', timeout=10)
+        ok = resp.status_code == 200
+        with count_lock:
+            if ok:
+                success_count += 1
+            else:
+                failed_count += 1
+        print(f"\r[+] Like - Success: {success_count} | Failed: {failed_count}", end="", flush=True)
+        return ok
+    except Exception:
+        with count_lock:
+            failed_count += 1
+        print(f"\r[+] Like - Success: {success_count} | Failed: {failed_count}", end="", flush=True)
+        return False
 
 
 def main() -> None:
