@@ -222,8 +222,38 @@ def get_user_info(username: str) -> Tuple[str, str]:
     username = clean_username(username)
     if not username:
         raise TikTokError("Username is empty.")
-    html = _fetch_profile_html(username)
 
+    print(f"[*] Fetching live room information for @{username}...")
+    user_id = ""
+    room_id = ""
+
+    # Method 1: Bypass WAF completely by hitting api-live/user/room/ directly with clientParams
+    try:
+        sess = curl_requests.Session(impersonate='chrome120')
+        url = f"https://www.tiktok.com/api-live/user/room/?uniqueId={username}&sourceType=54&aid=1988&app_language=en&device_platform=web_pc"
+        resp = sess.get(url, timeout=15)
+        
+        if resp.status_code == 200:
+            js = resp.json()
+            data = js.get("data", {})
+            if data:
+                user_info = data.get("user", {})
+                
+                # The API returns both room_id and user_id directly inside `data.user`
+                user_id = str(user_info.get("id", ""))
+                room_id = str(user_info.get("roomId", ""))
+                
+                if user_id and room_id and room_id != "0":
+                    print(f"[✓] Got room ID via Webcast API-Live!")
+                    return user_id, room_id
+                elif user_id and (not room_id or room_id == "0"):
+                    print(f"[!] TikTok API confirms @{username} is currently OFFLINE.")
+                    return user_id, ""
+    except Exception as e:
+        print(f"[~] Webcast API-Live error: {e}")
+
+    # Method 2: Fallback to HTML scraping if API fails or returns offline (in case profile contains different info)
+    html = _fetch_profile_html(username)
     if "SlardarWAF" in html or "slardar_us_waf" in html:
         raise TikTokError(
             "TikTok blocked this automated request before returning profile data. "
@@ -320,94 +350,120 @@ def build_params():
 
 def send_comment_thread(user_id: str, room_id: str, words: Set[str]) -> bool:
     global comment_success, comment_failed
-    try:
-        sess = curl_requests.Session()
-        ss = random.choice(SESSION_IDS)
-        secret = secrets.token_hex(16)
-        sess.cookies.update({
-            "passport_csrf_token": secret,
-            "passport_csrf_token_default": secret,
-            "sessionid": ss,
-        })
-        host = random.choice(["22", "21", "16", "15", "19"])
-        url = f"https://webcast{host}-normal-c-alisg.tiktokv.com/webcast/room/chat/"
-        params = build_params()
-        cmm = random.choice(list(words))
-        payload = {
-            'room_id': room_id,
-            'emotes_with_index': "",
-            'anchor_id': user_id,
-            'content': cmm,
-            'is_ad': '0',
-            'input_type': '0',
-            'enter_source': '',
-            'post_anyway': '0',
-            'client_start_timestamp_millisecond': str(int(time.time() * 1000)),
-            'enter_method': 'live_cover',
-            'enter_from_merge': 'live_merge',
-            'tag': 'live_ad',
-            'request_id': f"req_{uuid.uuid4().hex}",
-        }
-        headers = {'User-Agent': generate_mobile_ua()}
-        mm = SignerPy.sign(params=params, payload=payload, url=url)
-        headers.update(mm)
-        resp = sess.post(url, params=params, data=payload, headers=headers, impersonate='chrome120', timeout=10)
-        response_text = resp.text
-        ok = resp.status_code == 200 and ("id" in response_text or "msg_id" in response_text)
-        with count_lock:
-            if ok:
-                comment_success += 1
-            else:
+    max_retries = 3
+    retry_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            sess = curl_requests.Session()
+            ss = random.choice(SESSION_IDS)
+            secret = secrets.token_hex(16)
+            sess.cookies.update({
+                "passport_csrf_token": secret,
+                "passport_csrf_token_default": secret,
+                "sessionid": ss,
+            })
+            host = random.choice(["22", "21", "16", "15", "19"])
+            url = f"https://webcast{host}-normal-c-alisg.tiktokv.com/webcast/room/chat/"
+            params = build_params()
+            cmm = random.choice(list(words))
+            payload = {
+                'room_id': room_id,
+                'emotes_with_index': "",
+                'anchor_id': user_id,
+                'content': cmm,
+                'is_ad': '0',
+                'input_type': '0',
+                'enter_source': '',
+                'post_anyway': '0',
+                'client_start_timestamp_millisecond': str(int(time.time() * 1000)),
+                'enter_method': 'live_cover',
+                'enter_from_merge': 'live_merge',
+                'tag': 'live_ad',
+                'request_id': f"req_{uuid.uuid4().hex}",
+            }
+            headers = {'User-Agent': generate_mobile_ua()}
+            mm = SignerPy.sign(params=params, payload=payload, url=url)
+            headers.update(mm)
+            resp = sess.post(url, params=params, data=payload, headers=headers, impersonate='chrome120', timeout=15)
+            response_text = resp.text
+            ok = resp.status_code == 200 and ("id" in response_text or "msg_id" in response_text)
+            
+            with count_lock:
+                if ok:
+                    comment_success += 1
+                    print(f"\r[+] Comment - Success: {comment_success} | Failed: {comment_failed}", end="", flush=True)
+                    return True
+                else:
+                    comment_failed += 1
+            
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                
+        except Exception as e:
+            with count_lock:
                 comment_failed += 1
-        print(f"\r[+] Comment - Success: {comment_success} | Failed: {comment_failed}", end="", flush=True)
-        return ok
-    except Exception:
-        with count_lock:
-            comment_failed += 1
-        print(f"\r[+] Comment - Success: {comment_success} | Failed: {comment_failed}", end="", flush=True)
-        return False
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+            continue
+    
+    print(f"\r[+] Comment - Success: {comment_success} | Failed: {comment_failed}", end="", flush=True)
+    return False
 
 
 def send_like_thread(user_id: str, room_id: str) -> bool:
     global like_success, like_failed
-    try:
-        sess = curl_requests.Session()
-        ss = random.choice(SESSION_IDS)
-        secret = secrets.token_hex(16)
-        sess.cookies.update({
-            "passport_csrf_token": secret,
-            "passport_csrf_token_default": secret,
-            "sessionid": ss,
-        })
-        host = random.choice(["22", "21", "16", "15", "19"])
-        url = f"https://webcast{host}-normal-c-alisg.tiktokv.com/webcast/room/like/"
-        params = build_params()
-        count = random.randint(1, 30)
-        payload = {
-            'room_id': room_id,
-            'anchor_id': user_id,
-            'count': str(count),
-            'like_count': str(count),
-            'enter_from_merge': 'live_merge',
-            'request_id': f"req_{uuid.uuid4().hex}",
-        }
-        headers = {'User-Agent': generate_mobile_ua()}
-        mm = SignerPy.sign(params=params, payload=payload, url=url)
-        headers.update(mm)
-        resp = sess.post(url, params=params, data=payload, headers=headers, impersonate='chrome120', timeout=10)
-        ok = resp.status_code == 200
-        with count_lock:
-            if ok:
-                like_success += 1
-            else:
+    max_retries = 3
+    retry_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            sess = curl_requests.Session()
+            ss = random.choice(SESSION_IDS)
+            secret = secrets.token_hex(16)
+            sess.cookies.update({
+                "passport_csrf_token": secret,
+                "passport_csrf_token_default": secret,
+                "sessionid": ss,
+            })
+            host = random.choice(["22", "21", "16", "15", "19"])
+            url = f"https://webcast{host}-normal-c-alisg.tiktokv.com/webcast/room/like/"
+            params = build_params()
+            count = random.randint(1, 30)
+            payload = {
+                'room_id': room_id,
+                'anchor_id': user_id,
+                'count': str(count),
+                'like_count': str(count),
+                'enter_from_merge': 'live_merge',
+                'request_id': f"req_{uuid.uuid4().hex}",
+            }
+            headers = {'User-Agent': generate_mobile_ua()}
+            mm = SignerPy.sign(params=params, payload=payload, url=url)
+            headers.update(mm)
+            resp = sess.post(url, params=params, data=payload, headers=headers, impersonate='chrome120', timeout=15)
+            ok = resp.status_code == 200
+            
+            with count_lock:
+                if ok:
+                    like_success += 1
+                    print(f"\r[+] Like - Success: {like_success} | Failed: {like_failed}", end="", flush=True)
+                    return True
+                else:
+                    like_failed += 1
+            
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                
+        except Exception as e:
+            with count_lock:
                 like_failed += 1
-        print(f"\r[+] Like - Success: {like_success} | Failed: {like_failed}", end="", flush=True)
-        return ok
-    except Exception:
-        with count_lock:
-            like_failed += 1
-        print(f"\r[+] Like - Success: {like_success} | Failed: {like_failed}", end="", flush=True)
-        return False
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+            continue
+    
+    print(f"\r[+] Like - Success: {like_success} | Failed: {like_failed}", end="", flush=True)
+    return False
 
 
 def main() -> None:
@@ -428,7 +484,7 @@ def main() -> None:
             return
         print(f"[✓] Room ID: {room_id}")
         print("=" * 50)
-        with ThreadPoolExecutor(max_workers=50) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(send_comment_thread, user_id, room_id, words) for _ in range(10000)]
             for future in as_completed(futures):
                 future.result()
