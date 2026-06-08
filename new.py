@@ -102,6 +102,27 @@ UA_APP_VERSIONS = [
 UA_TTNET_VERSIONS = ["6a8e8a4c", "7b9f9b5d", "8c0a0c6e", "9d1b1d7f"]
 UA_QUIC_VERSIONS = ["5f23035d", "6g34146e", "7h45257f", "8i56368g"]
 
+PROXY_LIST = [
+    "38.154.203.95:5863:nvlfwozd:amv8s0aajp2i",
+    "198.105.121.200:6462:nvlfwozd:amv8s0aajp2i",
+    "64.137.96.74:6641:nvlfwozd:amv8s0aajp2i",
+    "209.127.138.10:5784:nvlfwozd:amv8s0aajp2i",
+    "38.154.185.97:6370:nvlfwozd:amv8s0aajp2i",
+    "84.247.60.125:6095:nvlfwozd:amv8s0aajp2i",
+    "142.111.67.146:5611:nvlfwozd:amv8s0aajp2i",
+    "191.96.254.138:6185:nvlfwozd:amv8s0aajp2i",
+    "31.58.9.4:6077:nvlfwozd:amv8s0aajp2i",
+    "104.239.107.47:5699:nvlfwozd:amv8s0aajp2i"
+]
+
+def get_proxy_dict(proxy_str):
+    parts = proxy_str.split(':')
+    if len(parts) == 4:
+        ip, port, user, password = parts
+        proxy_url = f"http://{user}:{password}@{ip}:{port}"
+        return {"http": proxy_url, "https": proxy_url}
+    return None
+
 comment_success = 0
 comment_failed = 0
 like_success = 0
@@ -349,6 +370,7 @@ def build_params():
 
 
 def send_comment_thread(user_id: str, room_id: str, words: Set[str]) -> bool:
+    time.sleep(random.uniform(0.01, 0.5))
     global comment_success, comment_failed
     max_retries = 3
     retry_delay = 2
@@ -385,7 +407,9 @@ def send_comment_thread(user_id: str, room_id: str, words: Set[str]) -> bool:
             headers = {'User-Agent': generate_mobile_ua()}
             mm = SignerPy.sign(params=params, payload=payload, url=url)
             headers.update(mm)
-            resp = sess.post(url, params=params, data=payload, headers=headers, impersonate='chrome120', timeout=15)
+            # proxy_str = random.choice(PROXY_LIST)
+            # proxies = get_proxy_dict(proxy_str)
+            resp = sess.post(url, params=params, data=payload, headers=headers, proxies=None, impersonate='chrome120', timeout=15)
             response_text = resp.text
             ok = resp.status_code == 200 and ("id" in response_text or "msg_id" in response_text)
             
@@ -398,13 +422,13 @@ def send_comment_thread(user_id: str, room_id: str, words: Set[str]) -> bool:
                     comment_failed += 1
             
             if attempt < max_retries - 1:
-                time.sleep(retry_delay)
+                time.sleep(2 ** attempt)
                 
         except Exception as e:
             with count_lock:
                 comment_failed += 1
             if attempt < max_retries - 1:
-                time.sleep(retry_delay)
+                time.sleep(2 ** attempt)
             continue
     
     print(f"\r[+] Comment - Success: {comment_success} | Failed: {comment_failed}", end="", flush=True)
@@ -412,9 +436,9 @@ def send_comment_thread(user_id: str, room_id: str, words: Set[str]) -> bool:
 
 
 def send_like_thread(user_id: str, room_id: str) -> bool:
+    time.sleep(random.uniform(0.01, 0.5))
     global like_success, like_failed
     max_retries = 3
-    retry_delay = 2
     
     for attempt in range(max_retries):
         try:
@@ -441,7 +465,9 @@ def send_like_thread(user_id: str, room_id: str) -> bool:
             headers = {'User-Agent': generate_mobile_ua()}
             mm = SignerPy.sign(params=params, payload=payload, url=url)
             headers.update(mm)
-            resp = sess.post(url, params=params, data=payload, headers=headers, impersonate='chrome120', timeout=15)
+            # proxy_str = random.choice(PROXY_LIST)
+            # proxies = get_proxy_dict(proxy_str)
+            resp = sess.post(url, params=params, data=payload, headers=headers, proxies=None, impersonate='chrome120', timeout=15)
             ok = resp.status_code == 200
             
             with count_lock:
@@ -466,8 +492,13 @@ def send_like_thread(user_id: str, room_id: str) -> bool:
     return False
 
 
-def main() -> None:
-    username = clean_username(input("username : "))
+def run_automation(username: str, mode: str, count: int = 1000) -> dict:
+    global comment_success, comment_failed, like_success, like_failed
+    comment_success = 0
+    comment_failed = 0
+    like_success = 0
+    like_failed = 0
+    
     words = {
         "hacker is here", "Hacker is Here", "HACKER IS HERE",
         "you've been hacked", "You've Been Hacked",
@@ -476,25 +507,63 @@ def main() -> None:
         "your account is mine", "Your Account Is Mine",
         "got you", "Got You", "GOT YOU",
     }
+    
     try:
         user_id, room_id = get_user_info(username)
         print(f"[✓] User ID: {user_id}")
         if not room_id:
             print(f"[!] @{username} is not live right now (no room ID found)")
-            return
+            return {"status": "error", "message": "User is not live"}
+            
         print(f"[✓] Room ID: {room_id}")
         print("=" * 50)
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [executor.submit(send_comment_thread, user_id, room_id, words) for _ in range(10000)]
+        
+        with ThreadPoolExecutor(max_workers=100) as executor:
+            futures = []
+            if mode == "1":
+                print("[*] Starting COMMENT flood...")
+                futures = [executor.submit(send_comment_thread, user_id, room_id, words) for _ in range(count)]
+            elif mode == "2":
+                print("[*] Starting LIKE flood...")
+                futures = [executor.submit(send_like_thread, user_id, room_id) for _ in range(count)]
+            elif mode == "3":
+                print("[*] Starting BOTH Comments & Likes flood...")
+                half = count // 2
+                for _ in range(half):
+                    futures.append(executor.submit(send_comment_thread, user_id, room_id, words))
+                    futures.append(executor.submit(send_like_thread, user_id, room_id))
+            else:
+                print("Invalid mode selected.")
+                return {"status": "error", "message": "Invalid mode"}
+                
             for future in as_completed(futures):
-                future.result()
+                pass
+                
         print("\n" + "=" * 50)
-        print(f"[✓] Final - Success: {comment_success} | Failed: {comment_failed}")
+        if mode in ["1", "3"]:
+            print(f"[✓] Comments Final - Success: {comment_success} | Failed: {comment_failed}")
+        if mode in ["2", "3"]:
+            print(f"[✓] Likes Final - Success: {like_success} | Failed: {like_failed}")
+            
+        return {
+            "status": "success",
+            "comments_success": comment_success,
+            "comments_failed": comment_failed,
+            "likes_success": like_success,
+            "likes_failed": like_failed
+        }
+            
     except TikTokError as e:
         print(e)
+        return {"status": "error", "message": str(e)}
     except requests.RequestException as e:
         print(f"Network error: {e}")
+        return {"status": "error", "message": str(e)}
 
+def main() -> None:
+    username = clean_username(input("username : "))
+    mode = input("Select Mode [1: Comments] [2: Likes] [3: Both]: ").strip()
+    run_automation(username, mode, count=1000)
 
 if __name__ == "__main__":
     main()
