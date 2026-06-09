@@ -64,8 +64,8 @@ function toast(msg, type = 'info') {
 
 /* ── UI helpers ── */
 const $ = (id) => document.getElementById(id);
-const val = (id) => $(id).value.trim();
-const num = (id) => parseInt($(id).value) || 0;
+const val = (id) => { const el = $(id); return el ? el.value.trim() : ''; };
+const num = (id) => { const el = $(id); return el ? parseInt(el.value) || 0 : 0; };
 
 function escape(s) {
   const d = document.createElement('div');
@@ -135,7 +135,6 @@ async function startTask() {
     }
 
     // Step 2: Start tasks based on action
-    const workers = num('workers-input') || 20;
     const hasComments = state.action === 'comments' || state.action === 'both';
     const hasLikes = state.action === 'likes' || state.action === 'both';
     const commentCount = num('comments-count');
@@ -145,12 +144,18 @@ async function startTask() {
 
     if (hasComments && commentCount > 0) {
       const defaultWords = [
-        "hacker is here", "Hacker is Here", "HACKER IS HERE",
-        "you've been hacked", "You've Been Hacked",
-        "hacker", "Hacker", "HACKER",
-        "i'm in", "I'm in", "IM IN",
-        "your account is mine", "Your Account Is Mine",
-        "got you", "Got You", "GOT YOU",
+        "Great stream!", "Nice content", "Love the vibe", "Keep it up",
+        "Well done", "Amazing broadcast", "Good energy", "Solid stream",
+        "Interesting points", "Way to go", "Keep going", "Enjoying the live",
+        "Nice to see you", "Loving this", "Good quality", "Awesome job",
+        "Super cool", "Nice work", "Good stuff", "Love this",
+        "So good", "Fantastic content", "Top notch", "Excellent work",
+        "hello everyone", "sending love", "this is fire", "lets go",
+        "yesss", "wow", "no way", "insane", "crazy good",
+        "best stream ever", "straight fire", "lets get it", "come on",
+        "whats good", "this is sick", "absolute banger", "W stream",
+        "first time here", "love the energy", "this is lit",
+        "came from fyp", "staying for vibes", "goated stream",
       ];
       btn.innerHTML = '<span class="spinner"></span> Starting comments...';
       const res = await POST('/send-comments', {
@@ -158,7 +163,6 @@ async function startTask() {
         room_id: info.room_id,
         words: defaultWords,
         count: commentCount,
-        workers,
       });
       tasks.push({ id: res.task_id, type: 'comments', total: commentCount });
       state.taskIds.push(res.task_id);
@@ -170,7 +174,6 @@ async function startTask() {
         user_id: info.user_id,
         room_id: info.room_id,
         count: likeCount,
-        workers,
       });
       tasks.push({ id: res.task_id, type: 'likes', total: likeCount });
       state.taskIds.push(res.task_id);
@@ -261,7 +264,7 @@ async function pollTasks() {
           t.status === 'cancelled' ? 'cancelled-fill' : cls
         );
       }
-      if (cntEl) cntEl.innerHTML = `<span class="ok">${t.success_count}</span> / <span class="fail">${t.failed_count}</span> / ${t.total}`;
+      if (cntEl) cntEl.innerHTML = `<span class="ok">${t.success_count}</span> / <span class="fail">${t.failed_count}</span> / ${t.total}<br><span style="font-size:11px;color:var(--text-muted);display:block;margin-top:4px">Sessions Used: ${t.sessions_used || 0} / ${t.sessions_total || 0}</span>`;
       if (stEl) {
         stEl.className = 'status-badge-sm ' + t.status;
         stEl.innerHTML = `<span class="dot"></span> ${t.status}`;

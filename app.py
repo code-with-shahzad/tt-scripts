@@ -2,6 +2,7 @@ import os
 import uuid
 import threading
 import time
+from math import ceil
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
@@ -28,6 +29,14 @@ app = FastAPI(
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+def _calc_workers(total: int) -> int:
+    try:
+        from new import SESSION_IDS
+        session_count = len(SESSION_IDS)
+    except ImportError:
+        session_count = 50
+    return min(session_count, max(5, ceil(total / 10)))
+
 
 class TaskStatus(str, Enum):
     pending = "pending"
@@ -37,14 +46,14 @@ class TaskStatus(str, Enum):
 
 
 class CommentTask:
-    def __init__(self, task_id: str, user_id: str, room_id: str, total: int, workers: int,
+    def __init__(self, task_id: str, user_id: str, room_id: str, total: int,
                  task_type: str = "comment", words: list[str] = None, like_count: int = 1):
         self.task_id = task_id
         self.user_id = user_id
         self.room_id = room_id
         self.words = words or []
         self.total = total
-        self.workers = workers
+        self.workers = _calc_workers(total)
         self.task_type = task_type
         self.like_count = like_count
         self.status = TaskStatus.pending
@@ -74,7 +83,7 @@ class CommentTask:
         self.status = TaskStatus.cancelled
 
     def to_dict(self):
-        return {
+        d = {
             "task_id": self.task_id,
             "user_id": self.user_id,
             "room_id": self.room_id,
@@ -87,6 +96,16 @@ class CommentTask:
             "workers": self.workers,
             "like_count": self.like_count,
         }
+        
+        try:
+            from new import session_usage, SESSION_IDS
+            d["sessions_used"] = len(session_usage)
+            d["sessions_total"] = len(SESSION_IDS)
+        except ImportError:
+            d["sessions_used"] = 0
+            d["sessions_total"] = 0
+            
+        return d
 
 
 tasks: dict[str, CommentTask] = {}
@@ -177,7 +196,6 @@ class BulkCommentRequest(BaseModel):
     room_id: str
     words: list[str] = Field(..., min_length=1, description="List of comment texts")
     count: int = Field(default=100, ge=1, le=50000, description="Number of comments to send")
-    workers: int = Field(default=20, ge=1, le=200, description="Number of concurrent threads")
 
 
 class SendLikeRequest(BaseModel):
@@ -194,7 +212,6 @@ class BulkLikeRequest(BaseModel):
     user_id: str
     room_id: str
     count: int = Field(default=100, ge=1, le=50000, description="Number of likes to send")
-    workers: int = Field(default=20, ge=1, le=200, description="Number of concurrent threads")
 
 
 class BulkLikeResponse(BaseModel):
@@ -221,6 +238,8 @@ class TaskStatusResponse(BaseModel):
     done: int
     workers: int
     like_count: int = 1
+    sessions_used: int = 0
+    sessions_total: int = 0
 
 
 class StatsResponse(BaseModel):
@@ -292,7 +311,6 @@ async def start_bulk_comments(req: BulkCommentRequest, background_tasks: Backgro
         room_id=req.room_id,
         words=req.words,
         total=req.count,
-        workers=req.workers,
     )
     with tasks_lock:
         tasks[task_id] = task
@@ -300,7 +318,7 @@ async def start_bulk_comments(req: BulkCommentRequest, background_tasks: Backgro
     return BulkCommentResponse(
         task_id=task_id,
         status=TaskStatus.pending.value,
-        message=f"Started sending {req.count} comments with {req.workers} workers",
+        message=f"Started sending {req.count} comments",
     )
 
 
@@ -321,7 +339,6 @@ async def start_bulk_likes(req: BulkLikeRequest, background_tasks: BackgroundTas
         user_id=req.user_id,
         room_id=req.room_id,
         total=req.count,
-        workers=req.workers,
         task_type="like",
     )
     with tasks_lock:
@@ -330,7 +347,7 @@ async def start_bulk_likes(req: BulkLikeRequest, background_tasks: BackgroundTas
     return BulkLikeResponse(
         task_id=task_id,
         status=TaskStatus.pending.value,
-        message=f"Started sending {req.count} likes with {req.workers} workers",
+        message=f"Started sending {req.count} likes",
     )
 
 

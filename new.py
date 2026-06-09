@@ -128,6 +128,16 @@ comment_failed = 0
 like_success = 0
 like_failed = 0
 count_lock = threading.Lock()
+session_usage = set()
+session_index = 0
+session_lock = threading.Lock()
+
+def get_next_session() -> str:
+    global session_index
+    with session_lock:
+        ss = SESSION_IDS[session_index % len(SESSION_IDS)]
+        session_index += 1
+        return ss
 
 
 class TikTokError(Exception):
@@ -369,16 +379,16 @@ def build_params():
     }
 
 
-def send_comment_thread(user_id: str, room_id: str, words: Set[str]) -> bool:
+def send_comment_thread(user_id: str, room_id: str, words: Set[str], worker_id: int = 0) -> bool:
     time.sleep(random.uniform(0.01, 0.5))
-    global comment_success, comment_failed
+    global comment_success, comment_failed, session_usage
     max_retries = 3
     retry_delay = 2
     
     for attempt in range(max_retries):
         try:
             sess = curl_requests.Session()
-            ss = random.choice(SESSION_IDS)
+            ss = get_next_session()
             secret = secrets.token_hex(16)
             sess.cookies.update({
                 "passport_csrf_token": secret,
@@ -389,11 +399,20 @@ def send_comment_thread(user_id: str, room_id: str, words: Set[str]) -> bool:
             url = f"https://webcast{host}-normal-c-alisg.tiktokv.com/webcast/room/chat/"
             params = build_params()
             cmm = random.choice(list(words))
+            
+            # SPINTAX / GHOSTING BYPASS
+            # Add invisible characters and random emojis to make every single comment mathematically unique
+            zero_width = ["\u200B", "\u200C", "\u200D", "\uFEFF"]
+            obfuscation = "".join(random.choices(zero_width, k=random.randint(2, 5)))
+            emojis = ["🔥", "⚡", "✨", "💯", "💀", "👾", "👀", "🥶", "🚀", "💥"]
+            suffix = f" {random.choice(emojis)}" if random.random() > 0.5 else ""
+            final_cmm = cmm + suffix + obfuscation
+            
             payload = {
                 'room_id': room_id,
                 'emotes_with_index': "",
                 'anchor_id': user_id,
-                'content': cmm,
+                'content': final_cmm,
                 'is_ad': '0',
                 'input_type': '0',
                 'enter_source': '',
@@ -407,16 +426,15 @@ def send_comment_thread(user_id: str, room_id: str, words: Set[str]) -> bool:
             headers = {'User-Agent': generate_mobile_ua()}
             mm = SignerPy.sign(params=params, payload=payload, url=url)
             headers.update(mm)
-            # proxy_str = random.choice(PROXY_LIST)
-            # proxies = get_proxy_dict(proxy_str)
-            resp = sess.post(url, params=params, data=payload, headers=headers, proxies=None, impersonate='chrome120', timeout=15)
+            resp = sess.post(url, params=params, data=payload, headers=headers, impersonate='chrome120', timeout=15)
             response_text = resp.text
             ok = resp.status_code == 200 and ("id" in response_text or "msg_id" in response_text)
             
             with count_lock:
                 if ok:
                     comment_success += 1
-                    print(f"\r[+] Comment - Success: {comment_success} | Failed: {comment_failed}", end="", flush=True)
+                    session_usage.add(ss)
+                    print(f"\r[Worker {worker_id:03d}] ✓ Comment - Success: {comment_success} | Failed: {comment_failed} | Sessions Used: {len(session_usage)}", end="", flush=True)
                     return True
                 else:
                     comment_failed += 1
@@ -431,19 +449,21 @@ def send_comment_thread(user_id: str, room_id: str, words: Set[str]) -> bool:
                 time.sleep(2 ** attempt)
             continue
     
-    print(f"\r[+] Comment - Success: {comment_success} | Failed: {comment_failed}", end="", flush=True)
+    with count_lock:
+        session_usage.add(ss)
+        print(f"\r[Worker {worker_id:03d}] ✗ Comment - Success: {comment_success} | Failed: {comment_failed} | Sessions Used: {len(session_usage)}", end="", flush=True)
     return False
 
 
-def send_like_thread(user_id: str, room_id: str) -> bool:
+def send_like_thread(user_id: str, room_id: str, worker_id: int = 0) -> bool:
     time.sleep(random.uniform(0.01, 0.5))
-    global like_success, like_failed
+    global like_success, like_failed, session_usage
     max_retries = 3
     
     for attempt in range(max_retries):
         try:
             sess = curl_requests.Session()
-            ss = random.choice(SESSION_IDS)
+            ss = get_next_session()
             secret = secrets.token_hex(16)
             sess.cookies.update({
                 "passport_csrf_token": secret,
@@ -465,15 +485,14 @@ def send_like_thread(user_id: str, room_id: str) -> bool:
             headers = {'User-Agent': generate_mobile_ua()}
             mm = SignerPy.sign(params=params, payload=payload, url=url)
             headers.update(mm)
-            # proxy_str = random.choice(PROXY_LIST)
-            # proxies = get_proxy_dict(proxy_str)
-            resp = sess.post(url, params=params, data=payload, headers=headers, proxies=None, impersonate='chrome120', timeout=15)
+            resp = sess.post(url, params=params, data=payload, headers=headers, impersonate='chrome120', timeout=15)
             ok = resp.status_code == 200
             
             with count_lock:
                 if ok:
                     like_success += 1
-                    print(f"\r[+] Like - Success: {like_success} | Failed: {like_failed}", end="", flush=True)
+                    session_usage.add(ss)
+                    print(f"\r[Worker {worker_id:03d}] ✓ Like - Success: {like_success} | Failed: {like_failed} | Sessions Used: {len(session_usage)}", end="", flush=True)
                     return True
                 else:
                     like_failed += 1
@@ -488,7 +507,9 @@ def send_like_thread(user_id: str, room_id: str) -> bool:
                 time.sleep(retry_delay)
             continue
     
-    print(f"\r[+] Like - Success: {like_success} | Failed: {like_failed}", end="", flush=True)
+    with count_lock:
+        session_usage.add(ss)
+        print(f"\r[Worker {worker_id:03d}] ✗ Like - Success: {like_success} | Failed: {like_failed} | Sessions Used: {len(session_usage)}", end="", flush=True)
     return False
 
 
@@ -500,12 +521,32 @@ def run_automation(username: str, mode: str, count: int = 1000) -> dict:
     like_failed = 0
     
     words = {
-        "hacker is here", "Hacker is Here", "HACKER IS HERE",
-        "you've been hacked", "You've Been Hacked",
-        "hacker", "Hacker", "HACKER",
-        "i'm in", "I'm in", "IM IN",
-        "your account is mine", "Your Account Is Mine",
-        "got you", "Got You", "GOT YOU",
+        "Great stream!", "Really enjoy watching", "Nice content", "Love the vibe",
+        "Keep it up", "Impressive live", "Well done", "Amazing broadcast",
+        "Good energy", "Loving the content", "Solid stream", "Great talking",
+        "Interesting points", "Way to go", "Keep going", "Enjoying the live",
+        "Nice to see you", "Great to have you", "Loving this", "Good quality",
+        "Superb performance", "Well executed", "Brilliant stuff", "Awesome job",
+        "Super cool", "Nice work", "Good stuff", "Well played",
+        "Great communication", "Clear & concise", "Love this", "So good",
+        "Fantastic content", "Top notch", "Excellent work", "Brilliant直播",
+        "Amazing quality", "Well done crew", "Great setup", "Professional stuff",
+        "Love the engagement", "Good chat", "Nice interaction", "Great community",
+        "Super fun", "Loving the banter", "Good banter", "Nice flow",
+        "Well structured", "Good pacing", "Love the content", "Nice presentation",
+        "Great delivery", "Impressive stuff", "Nice work guys", "Well done team",
+        "Superb content", "Amazing stuff", "Love watching", "Good vibe",
+        "Nice to see", "Great to watch", "Superb live", "Excellent streaming",
+        "Well maintained", "Good quality content", "Nice to see you all", "Great day",
+        "Loving this channel", "Good vibes only", "Super fun stream", "Nice chat everyone",
+        "Great atmosphere", "Love the community", "Super nice people", "Great energy here",
+        "Well organized", "Good flow", "Nice progression", "Great content keep it up",
+        "Love the stream", "Nice to see you here", "Great day for streaming", "Superb vibes",
+        "Good to see", "Love this platform", "Nice to meet you", "Great stuff overall",
+        "Superb live stream", "Excellent broadcast", "Well done all", "Great teamwork",
+        "system hijacked", "access granted", "we are anonymous", "security breached",
+        "target locked", "mission accomplished", "we are watching", "data compromised",
+        "firewall bypassed", "taking control", "system override", "connection established"
     }
     
     try:
@@ -516,22 +557,24 @@ def run_automation(username: str, mode: str, count: int = 1000) -> dict:
             return {"status": "error", "message": "User is not live"}
             
         print(f"[✓] Room ID: {room_id}")
+        print(f"[✓] Total Sessions Available: {len(SESSION_IDS)}")
+        print(f"[✓] Workers: {100}")
         print("=" * 50)
         
         with ThreadPoolExecutor(max_workers=100) as executor:
             futures = []
             if mode == "1":
                 print("[*] Starting COMMENT flood...")
-                futures = [executor.submit(send_comment_thread, user_id, room_id, words) for _ in range(count)]
+                futures = [executor.submit(send_comment_thread, user_id, room_id, words, i) for i in range(count)]
             elif mode == "2":
                 print("[*] Starting LIKE flood...")
-                futures = [executor.submit(send_like_thread, user_id, room_id) for _ in range(count)]
+                futures = [executor.submit(send_like_thread, user_id, room_id, i) for i in range(count)]
             elif mode == "3":
                 print("[*] Starting BOTH Comments & Likes flood...")
                 half = count // 2
-                for _ in range(half):
-                    futures.append(executor.submit(send_comment_thread, user_id, room_id, words))
-                    futures.append(executor.submit(send_like_thread, user_id, room_id))
+                for i in range(half):
+                    futures.append(executor.submit(send_comment_thread, user_id, room_id, words, i))
+                    futures.append(executor.submit(send_like_thread, user_id, room_id, i + half))
             else:
                 print("Invalid mode selected.")
                 return {"status": "error", "message": "Invalid mode"}
@@ -540,17 +583,20 @@ def run_automation(username: str, mode: str, count: int = 1000) -> dict:
                 pass
                 
         print("\n" + "=" * 50)
+        print(f"[✓] Sessions Used: {len(session_usage)} / {len(SESSION_IDS)}")
         if mode in ["1", "3"]:
-            print(f"[✓] Comments Final - Success: {comment_success} | Failed: {comment_failed}")
+            print(f"[✓] Comments Final - Success: {comment_success} | Failed: {comment_failed} | Accept Rate: {comment_success / (comment_success + comment_failed) * 100:.2f}%")
         if mode in ["2", "3"]:
-            print(f"[✓] Likes Final - Success: {like_success} | Failed: {like_failed}")
+            print(f"[✓] Likes Final - Success: {like_success} | Failed: {like_failed} | Accept Rate: {like_success / (like_success + like_failed) * 100:.2f}%")
             
         return {
             "status": "success",
             "comments_success": comment_success,
             "comments_failed": comment_failed,
             "likes_success": like_success,
-            "likes_failed": like_failed
+            "likes_failed": like_failed,
+            "sessions_used": len(session_usage),
+            "total_sessions": len(SESSION_IDS)
         }
             
     except TikTokError as e:
@@ -563,7 +609,9 @@ def run_automation(username: str, mode: str, count: int = 1000) -> dict:
 def main() -> None:
     username = clean_username(input("username : "))
     mode = input("Select Mode [1: Comments] [2: Likes] [3: Both]: ").strip()
-    run_automation(username, mode, count=1000)
+    result = run_automation(username, mode, count=1000)
+    if result.get("status") == "success":
+        print(f"\n[✓] Automation completed: {result}")
 
 if __name__ == "__main__":
     main()

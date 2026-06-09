@@ -1,23 +1,11 @@
 import re
-import random
-from concurrent.futures import ThreadPoolExecutor
+import time
 try:
     from curl_cffi import requests
 except ImportError:
     import requests
 
-def get_proxy_dict(proxy_str):
-    parts = proxy_str.split(':')
-    if len(parts) == 4:
-        ip, port, user, password = parts
-        proxy_url = f"http://{user}:{password}@{ip}:{port}"
-        return {"http": proxy_url, "https": proxy_url}
-    return None
-
-def check_session(sess, proxies_raw):
-    proxy_str = random.choice(proxies_raw) if proxies_raw else None
-    proxy_dict = get_proxy_dict(proxy_str) if proxy_str else None
-    
+def check_session(sess):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*"
@@ -34,10 +22,10 @@ def check_session(sess, proxies_raw):
         )
         data = resp.json()
         if data.get("data", {}).get("user_id"):
-            return sess, True
-        return sess, False
+            return True
+        return False
     except Exception as e:
-        return sess, False
+        return False
 
 def main():
     with open("new.py", "r") as f:
@@ -49,26 +37,20 @@ def main():
     if sessions_match:
         sessions = re.findall(r'"([a-f0-9]{32})"', sessions_match.group(1))
 
-    # Extract proxies
-    proxies_match = re.search(r'PROXY_LIST = \[(.*?)\]', content, re.S)
-    proxies_raw = []
-    if proxies_match:
-        proxies_raw = re.findall(r'"([^"]+)"', proxies_match.group(1))
-
-    print(f"[*] Found {len(sessions)} session IDs and {len(proxies_raw)} proxies in new.py")
-    print("[*] Checking sessions... Please wait.")
+    print(f"[*] Found {len(sessions)} session IDs in new.py")
+    print("[*] Checking sessions locally (No proxies, slow mode to avoid false bans)... Please wait.")
 
     valid_sessions = []
     invalid_sessions = []
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(check_session, sess, proxies_raw) for sess in sessions]
-        for future in futures:
-            sess, is_valid = future.result()
-            if is_valid:
-                valid_sessions.append(sess)
-            else:
-                invalid_sessions.append(sess)
+    for i, sess in enumerate(sessions):
+        print(f"Checking {i+1}/{len(sessions)}... ", end="\r")
+        is_valid = check_session(sess)
+        if is_valid:
+            valid_sessions.append(sess)
+        else:
+            invalid_sessions.append(sess)
+        time.sleep(1.5) # Sleep 1.5s to absolutely guarantee no local rate limit false negatives
 
     print("\n" + "="*50)
     print(f"[✓] Valid Sessions (Alive): {len(valid_sessions)}")
