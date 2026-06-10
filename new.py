@@ -36,60 +36,31 @@ except ImportError:
     from curl_cffi import requests as curl_requests
 
 SESSION_IDS = [
-    "41b6da299c3ef4ae21f521f2d2b15bd7",
-    "20ce7d3a456a3a9fee3855a8e255fdf4",
-    "3b1bfc8cc8ae1a9cf11b62e72281cd00",
-    "1e152a17616b1e782cf8cc61cbb91bb3",
-    "58dc54cf3683887177302881483ae377",
-    "24180f8593a2a1fcc3067faf959c6429",
     "176fe741c87a89077d5551534638f7a4",
-    "2530f644ba19dd2af5ce47f368f745f9",
     "62c129a252218856386d6f1ed820b567",
     "df20a3975324769a20a8d993a369db79",
     "345f84c146f335afac10e3812e4c1036",
     "12f587f76da894ff4c97c377ef2d2701",
-    "3cf0d0506e1b29f56bd51a8e3feb529a",
-    "553e913f283421af9b8609c3f842cc1e",
     "6b89789bec69edc6cc19f8339dee3a7c",
-    "352929797106fb0ba35f7c67fe568753",
-    "4538799c6b6aec3e44ab14ac44e77f36",
-    "3587096c3c693e4eaded28698eba7e78",
     "97070268205d331109684cc6ca65b05f",
-    "4ac8b9a8a1f452d1c0242dd7f8bba0dc",
-    "7952b5f43115ce2c961f1b88109b8935",
     "765ffe2c064c2a12b79925e345d5ceaa",
-    "7a40e2007ada042493213484d9102b87",
     "aa0793fea02903d2a4175c9f3879a254",
     "a02c909d0d59748384b11876e3c95ff3",
-    "999ab52746768e0f2350df8d12f1fe39",
-    "aec26fc0a29d849a77864ef8b9bc9726",
     "a1f778c3ea389e24daa725ac77edd4ba",
-    "a4bb43e930bbfdd6a17d4245dea38729",
     "7f645181d5936f3d04c4052f1dbd86c5",
     "7cc4ecf185702c25d84de8ce8e6ac03d",
-    "b225a7d4399fd4296a198deccd1d2925",
     "ac92b3c19e435a2070e076b1d397af5f",
-    "8396fe8ff00188c0b2f6ac65461b3f2c",
     "7cbd19de01ece28886d04b42d352a062",
-    "bf5f15cca680e41daf37ac3791c2c7f9",
     "a49e1e1fa53a86eedb0b2f32c61daac7",
-    "b8a9c7d3e4f5a6b7c8d9e0f1a2b3c4d5",
-    "70cf01c9fbcb771879801b31724864bf",
-    "68998360c4cfc08e279c55ac14465ffb",
     "c7f39c9046f21bf65cbb346dac2319a8",
     "d05154e0ce203af5551e09e75d415c60",
     "eb21f64a0864a803c4757ac9ebb45015",
     "e96ca45cbe375cc81ece8aac4b1a8511",
-    "ea83031e5a059b78069b6aa4c79c7a7a",
     "e3b4c90df76b91fb953368d7dda2d46e",
-    "e1b731c52feebb2df5106e27c4fbc35c",
     "c37fd504e72356827cdca6de5ae02562",
-    "e9f8d7c6b5a4e3d2c1b0a9f8e7d6c5b4",
     "e7873d8aa4512938f980226b966791b7",
     "ea3823f67daa95976dfcd68b56c21f8b",
     "f8fc5a7d71caefa8fa606eb0612ba21e",
-    "d83f7ca44b3422b2b7ff7bc672a194b1",
-    "d8df8982e2f705f05a1672bbe5896ad0",
     "ed5f8bd4d239ced09488d3986c400c29"
 ]
 REGIONS = ["AE", "IQ", "US", "FR", "DE"]
@@ -459,6 +430,7 @@ def send_like_thread(user_id: str, room_id: str, worker_id: int = 0) -> bool:
     time.sleep(random.uniform(0.01, 0.5))
     global like_success, like_failed, session_usage
     max_retries = 3
+    retry_delay = 2
     
     for attempt in range(max_retries):
         try:
@@ -486,7 +458,13 @@ def send_like_thread(user_id: str, room_id: str, worker_id: int = 0) -> bool:
             mm = SignerPy.sign(params=params, payload=payload, url=url)
             headers.update(mm)
             resp = sess.post(url, params=params, data=payload, headers=headers, impersonate='chrome120', timeout=15)
-            ok = resp.status_code == 200
+            ok = False
+            if resp.status_code == 200:
+                try:
+                    resp_data = resp.json()
+                    ok = resp_data.get("status_code") == 0 and "data" in resp_data
+                except Exception:
+                    ok = True
             
             with count_lock:
                 if ok:
