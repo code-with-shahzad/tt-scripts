@@ -32,7 +32,7 @@ def main():
         content = f.read()
 
     # Extract sessions
-    sessions_match = re.search(r'SESSION_IDS = \[(.*?)\]', content, re.S)
+    sessions_match = re.search(r'SESSION_IDS.*?= \[(.*?)\]', content, re.S)
     sessions = []
     if sessions_match:
         sessions = re.findall(r'"([a-f0-9]{32})"', sessions_match.group(1))
